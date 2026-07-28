@@ -17,6 +17,11 @@ const BUILD_LABEL = BUILD_TIME
   ? new Date(BUILD_TIME).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
   : '?';
 
+// Numéro de version (source unique : frontend/package.json → "version").
+// Convention à partir de V1 : on incrémente 1.0.0 → 1.1.0 → 1.2.0 à chaque
+// changement livré, plutôt que des tags génériques "V2", "V3"…
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?';
+
 function Swatch({ color, size = 12 }) {
   return <span style={{ display: 'inline-block', width: size, height: size, borderRadius: 3, background: color, border: '1px solid rgba(255,255,255,0.12)', flexShrink: 0 }} />;
 }
@@ -261,7 +266,7 @@ export default function AppInfoModal({ onClose }) {
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
             <span style={{ fontWeight: 800, fontSize: 14, color: 'var(--text)' }}>{t('info.title')}</span>
-            <span style={{ fontSize: 10, color: 'var(--text-muted)', opacity: 0.5 }} title={BUILD_TIME || ''}>build {BUILD_LABEL}</span>
+            <span style={{ fontSize: 10, color: 'var(--text-muted)', opacity: 0.5 }} title={BUILD_TIME || ''}>v{APP_VERSION} · build {BUILD_LABEL}</span>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 20, cursor: 'pointer', lineHeight: 1 }}>×</button>
         </div>
