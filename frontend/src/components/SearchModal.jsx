@@ -280,8 +280,17 @@ export default function SearchModal({ api, token, boardGames, onAdd, onRemove, o
             ))}
           </div>
 
-          {customSubTab === 'fiche' && (
-          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 22px 16px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {/* ── Fiche / Notes empilés dans la même cellule de grille : les deux restent
+                 montés en permanence, seule la visibilité change. Ainsi la hauteur de la
+                 modale est dictée par le plus grand des deux (systématiquement "Fiche",
+                 plus complet) et ne varie plus quand on change d'onglet — avant, passer sur
+                 "Notes" (souvent vide à la création) faisait rapetisser toute la modale. ── */}
+          <div style={{ flex: 1, display: 'grid', overflow: 'hidden' }}>
+          <div style={{
+            gridArea: '1 / 1', overflowY: 'auto', padding: '20px 22px 16px', display: 'flex', flexDirection: 'column', gap: 18,
+            visibility: customSubTab === 'fiche' ? 'visible' : 'hidden',
+            pointerEvents: customSubTab === 'fiche' ? 'auto' : 'none',
+          }}>
             {!isEditMode && (
               <p style={{ margin: 0, fontSize: 14, color: 'var(--text-muted)' }}>
                 {t('search.custom_desc')}
@@ -467,14 +476,17 @@ export default function SearchModal({ api, token, boardGames, onAdd, onRemove, o
             <ProgressSlider value={progress} onChange={setProgress} compact />
 
           </div>
-          )} {/* end customSubTab === 'fiche' */}
+          {/* end panneau Fiche */}
 
           {/* ── Sous-onglet Notes ── */}
-          {customSubTab === 'notes' && (
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 22px' }}>
-              <NotesSection notes={notes} onSave={setNotes} onDraftChange={setNotesDraft} compact={false} token={token} currentUser={currentUser} appUsers={appUsers} />
-            </div>
-          )}
+          <div style={{
+            gridArea: '1 / 1', overflowY: 'auto', padding: '16px 22px',
+            visibility: customSubTab === 'notes' ? 'visible' : 'hidden',
+            pointerEvents: customSubTab === 'notes' ? 'auto' : 'none',
+          }}>
+            <NotesSection notes={notes} onSave={setNotes} onDraftChange={setNotesDraft} compact={false} token={token} currentUser={currentUser} appUsers={appUsers} />
+          </div>
+          </div> {/* end grille Fiche/Notes */}
 
           {/* ── Submit sticky — uniquement en création. En édition, la croix et le clic
                  hors zone enregistrent déjà automatiquement (cf. handleClose) : un bouton
