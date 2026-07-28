@@ -1,0 +1,24 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+      # Obligatoire : mot de passe du compte admin (défaut: admin123)
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      # Obligatoire : secret JWT (génère une chaîne aléatoire longue)
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      # Obligatoire : clé API Steam (https://steamcommunity.com/dev/apikey)
+      - STEAM_API_KEY=${STEAM_API_KEY}
+      # URLs publiques — injectées automatiquement par Coolify via SERVICE_URL_FRONTEND.
+      # À surcharger manuellement seulement si tu n'utilises pas Coolify.
+      - FRONTEND_URL=${FRONTEND_URL}
+      - BACKEND_URL=${BACKEND_URL}
+    volumes:
+      - /opt/kanbangaming/data:/app/data
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
