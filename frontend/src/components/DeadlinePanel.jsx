@@ -345,7 +345,16 @@ function Section({ cat, tasks, onOpenTask, hiddenDeadlineIds, showHiddenDeadline
                     // en permanence (uniquement ici, dans les Échéances), donc plus besoin de
                     // compenser via headerHeight : toutes les cartes (perso, wishlist, Steam)
                     // ont maintenant la même hauteur, peu importe la longueur du titre.
-                    headerHeight={88}
+                    //
+                    // headerAspect remplace l'ancien headerHeight={88} : à 88px fixes, une
+                    // bannière Steam (460x215, ratio ~2.14) était recadrée d'environ 25 % en
+                    // hauteur, ce qui amputait le logo du jeu imprimé dans l'image (constaté
+                    // sur Corsair Cove, dont le titre était coupé en haut). En raisonnant en
+                    // ratio, la hauteur suit la largeur réelle de la carte : l'image est
+                    // affichée entière à toutes les largeurs de colonne, y compris après un
+                    // redimensionnement du panneau via son séparateur. Les cartes sont donc
+                    // un peu plus hautes qu'avant (~117px d'image à la largeur par défaut).
+                    headerAspect={460 / 215}
                     titleMinHeight={37}
                   />
                 </div>

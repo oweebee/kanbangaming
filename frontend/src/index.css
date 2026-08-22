@@ -18,6 +18,11 @@ svg[viewBox="0 0 496 512"] { transform: scale(-1); }
   --steam:     #1b2838;
   --gold:      #c89a2a;
   --radius:    10px;
+  /* Pouce de scrollbar : volontairement plus sombre que --border (#505050) pour
+     ne pas se confondre avec les séparateurs redimensionnables de l'accueil,
+     qui utilisent --border et sont collés aux colonnes scrollables. */
+  --scroll-thumb:   #4a4a4a;
+  --scroll-thumb-h: rgba(192, 87, 10, 0.65); /* --accent atténué */
 }
 
 html, body, #root {
@@ -37,10 +42,34 @@ html, body {
   overflow: hidden;
 }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+/* ── Barres de défilement ─────────────────────────────────────────────────────
+   Objectif : fines, discrètes, dans le thème.
+   Le "canal" fait 9px (cible de clic/drag confortable à la souris) mais le pouce
+   n'en occupe visuellement que 3px : la bordure transparente de 3px combinée à
+   background-clip: padding-box rogne le rendu sans rogner la zone cliquable.
+   Résultat plus fin que l'ancien 5px plein, tout en restant attrapable.
+   Au survol, le pouce passe en teinte accent — cohérent avec le reste de l'UI. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+  border-radius: 9px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-h);
+  background-clip: padding-box;
+  border: 2px solid transparent; /* légèrement plus épais au survol = feedback */
+}
+
+/* Firefox : aucune règle n'existait, la scrollbar système (large) s'affichait.
+   scrollbar-width n'accepte pas de valeur libre — "thin" est le minimum visible. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
 
 button { cursor: pointer; font-family: inherit; }
 input, button { font-family: inherit; }

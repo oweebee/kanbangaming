@@ -1191,22 +1191,26 @@ const appReleaseDateCache   = new Map(); // appid → { date, fetchedAt }
 const APP_DATE_TTL = 24 * 60 * 60 * 1000; // 24h
 
 // ── Suivi persistant des échéances wishlist ─────────────────────────────────
-// Steam retire automatiquement un jeu de la wishlist dès qu'on le possède —
-// ce qui arrive souvent PILE au moment de sa sortie (achat le jour J, clé
-// activée…). Sans ce filet, un jeu qui vient de sortir/d'être acheté
-// disparaissait des Échéances au moment même où on s'attendrait le plus à le
-// voir dans "Attention !". On mémorise donc sur disque (survit aux redémarrages,
-// contrairement aux caches en mémoire ci-dessus), par utilisateur, la dernière
-// date de sortie connue de chaque jeu croisé dans la wishlist. Un jeu qui
-// quitte la wishlist reste visible dans les Échéances jusqu'à
-// WISHLIST_TRACK_RETENTION_MS après sa sortie (30 j, comme la Corbeille), puis
-// est oublié automatiquement — l'utilisateur peut aussi le masquer avant ça
-// via le bouton œil déjà existant sur les cartes wishlist.
-// Nuance : Steam ne dit pas POURQUOI un jeu a quitté la wishlist (acheté, ou
-// juste retiré à la main). On vérifie donc la bibliothèque Steam du joueur :
-// si le jeu n'y est pas, le retrait est volontaire → on arrête le suivi tout
-// de suite au lieu d'attendre bêtement les 30 jours (cf. bug : un jeu retiré
-// manuellement avant sa sortie restait visible en Échéances indéfiniment).
+// RÈGLE PRINCIPALE : un jeu POSSÉDÉ n'a plus rien à faire dans les Échéances.
+// Une échéance sert à ne pas rater une sortie ; une fois le jeu acquis, l'objet
+// est atteint. La bibliothèque Steam du joueur fait donc autorité et sort le
+// jeu des Échéances immédiatement, sans délai de grâce.
+//
+// Ce fichier de suivi ne subsiste que comme FILET DE SECOURS pour le cas où la
+// bibliothèque est indisponible (utilisateur sans clé API Steam, ou appel
+// GetOwnedGames en échec). Dans ce cas seul, on ne peut pas savoir pourquoi un
+// jeu a quitté la wishlist (acheté ? retiré à la main ?) : on le garde alors
+// visible jusqu'à WISHLIST_TRACK_RETENTION_MS après sa sortie (30 j, comme la
+// Corbeille) pour ne pas le faire disparaître en silence, puis on l'oublie.
+// L'utilisateur peut aussi le masquer avant ça via le bouton œil des cartes.
+//
+// Historique : ce suivi appliquait auparavant les 30 jours de grâce AUSSI aux
+// jeux possédés (l'idée était de garder visible un jeu acheté le jour J, que
+// Steam retire aussitôt de la wishlist). Effet de bord constaté : un jeu acheté
+// restait un mois dans "Attention !" en s'affichant sous un badge doré
+// "Steam Wishlist" (DeadlinePanel.jsx) alors qu'il n'était plus en wishlist et
+// était déjà dans la bibliothèque — trompeur. Cf. Corsair Cove (appid 1368140,
+// sorti le 31/07/2026, acheté, toujours listé le 22/08/2026).
 const WISHLIST_TRACK_FILE = path.join(DATA_DIR, 'wishlistTrack.json');
 const WISHLIST_TRACK_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours
 let _wishlistTrackCache = null;
@@ -1405,14 +1409,29 @@ async function getWishlistItemsRaw(userId) {
 app.get('/api/steam/wishlist/deadline', requireAuth, async (req, res) => {
   try {
     const items = await getWishlistItemsRaw(req.user.id);
-    const live = items.filter(i => i.release_date !== null);
 
-    // ── Fusion avec le suivi persistant (jeux sortis/achetés = retirés de la
-    // wishlist live par Steam, mais qu'on veut quand même montrer un moment) ──
     const now = Date.now();
     const track = readWishlistTrack();
     const userTrack = { ...(track[req.user.id] || {}) };
     let trackChanged = false;
+
+    // ── Bibliothèque Steam : autorité sur la possession ──────────────────────
+    // Chargée une seule fois pour toute la requête (getLibraryMap a son propre
+    // cache, l'appel est donc léger). Si les creds manquent ou que l'appel
+    // échoue, lib est vide : on NEUTRALISE alors tous les filtres de possession
+    // ci-dessous plutôt que de vider les Échéances sur une panne transitoire.
+    const creds = getUserSteamCreds(req.user.id);
+    let lib = new Map();
+    if (creds.apiKey && creds.steamId) lib = await getLibraryMap(req.user.id);
+    const libKnown = lib.size > 0;
+    const isOwned = appid => libKnown && lib.has(appid);
+
+    // Un jeu possédé est exclu même s'il figure ENCORE dans la wishlist live :
+    // Steam ne retire pas toujours l'entrée (édition/package différent, retard
+    // de propagation…). Sans ce filtre, un tel jeu restait en échéance
+    // indéfiniment — la vérification de possession n'existait que sur la
+    // branche "ressuscités" plus bas.
+    const live = items.filter(i => i.release_date !== null && !isOwned(i.appid));
 
     const liveIds = new Set();
     for (const it of live) {
@@ -1424,27 +1443,19 @@ app.get('/api/steam/wishlist/deadline', requireAuth, async (req, res) => {
       }
     }
 
-    // Bibliothèque chargée paresseusement (seulement s'il y a vraiment des
-    // entrées orphelines à trancher) et une seule fois pour toute la boucle —
-    // getLibraryMap a son propre cache donc l'appel est de toute façon léger.
-    const creds = getUserSteamCreds(req.user.id);
-    let lib = null;
-
     const resurrected = [];
     for (const [appidStr, entry] of Object.entries(userTrack)) {
       const appid = Number(appidStr);
       if (liveIds.has(appid)) continue; // déjà à jour via la wishlist live ci-dessus
 
-      // Retrait volontaire (jeu ni dans la wishlist live, ni dans la bibliothèque
-      // possédée) → on arrête le suivi immédiatement, pas de délai de 30 jours.
-      // Si les creds Steam sont absents ou l'appel échoue, lib reste vide sans
-      // qu'on puisse trancher : on ne supprime rien dans ce cas et on retombe
-      // sur la logique de rétention par date ci-dessous, par sécurité.
-      if (creds.apiKey && creds.steamId) {
-        if (lib === null) lib = await getLibraryMap(req.user.id);
-        if (lib.size > 0 && !lib.has(appid)) { delete userTrack[appidStr]; trackChanged = true; continue; }
-      }
+      // Bibliothèque connue → on tranche tout de suite, dans les deux sens, et
+      // le suivi s'arrête sans attendre les 30 jours :
+      //   - possédé     → le jeu est acquis, l'échéance n'a plus d'objet
+      //   - non possédé → il a été retiré volontairement de la wishlist
+      if (libKnown) { delete userTrack[appidStr]; trackChanged = true; continue; }
 
+      // Bibliothèque indisponible uniquement (pas de clé API, ou GetOwnedGames
+      // en échec) : impossible de trancher → filet de sécurité, rétention 30 j.
       const age = now - new Date(entry.release_date).getTime();
       if (age > WISHLIST_TRACK_RETENTION_MS) { delete userTrack[appidStr]; trackChanged = true; continue; }
       resurrected.push({ appid, name: entry.name, header_img: entry.header_img, release_date: entry.release_date, onSale: false });

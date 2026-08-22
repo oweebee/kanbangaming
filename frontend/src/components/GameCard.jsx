@@ -11,7 +11,7 @@ import { useLang } from '../i18n.js';
 // (le DnD natif HTML5 existant, souris uniquement, reste inchangé pour tout le
 // monde). DeadlinePanel et MobileBoard ne les passent pas → aucun changement de
 // comportement pour eux, ils gardent leurs propres systèmes de drag tactile.
-export default function GameCard({ game, onDragStart, onDragEnd, onClick, onArchive, onUnarchive, onDelete, onEdit, isDragging, readOnly, isTaskBoard, compact = false, assignees = [], appUsers = [], onToggleDone, onToggleUrgent, onUpdateAssignees, onClickNotes, genreColor = null, isHidden = false, onHide, onUnhide, headerHeight = null, titleMinHeight = null, badgeOffset = 5, onTouchDragMove, onTouchDragEnd, dragDisabled = false }) {
+export default function GameCard({ game, onDragStart, onDragEnd, onClick, onArchive, onUnarchive, onDelete, onEdit, isDragging, readOnly, isTaskBoard, compact = false, assignees = [], appUsers = [], onToggleDone, onToggleUrgent, onUpdateAssignees, onClickNotes, genreColor = null, isHidden = false, onHide, onUnhide, headerHeight = null, headerAspect = null, titleMinHeight = null, badgeOffset = 5, onTouchDragMove, onTouchDragEnd, dragDisabled = false }) {
   const { t } = useLang();
   const [imgError, setImgError] = useState(false);
   const [ttImgError, setTtImgError] = useState(false);
@@ -23,6 +23,14 @@ export default function GameCard({ game, onDragStart, onDragEnd, onClick, onArch
   const isUrgent   = !!game.urgent;
   const isDone     = !!game.done;
   const notesCount = (game.notes || []).length;
+  // Zone image : voir le commentaire détaillé au-dessus du JSX correspondant.
+  // headerBox = conteneurs/placeholders, headerImgStyle = balises <img>.
+  const headerBox = headerAspect
+    ? { width: '100%', aspectRatio: String(headerAspect), height: 'auto' }
+    : { width: '100%', height: headerHeight ?? 88 };
+  const headerImgStyle = headerAspect
+    ? { width: '100%', aspectRatio: String(headerAspect), height: 'auto', objectFit: 'cover', display: 'block' }
+    : { width: '100%', height: headerHeight ? headerHeight : 'auto', objectFit: headerHeight ? 'cover' : undefined, display: 'block' };
   const tt         = game.taskType ? getTaskType(game.taskType) : null;
   const customColor = isCustom && !tt ? (game.color || '#66c0f4') : null;
   const TtFallback = tt?.FallbackIcon;
@@ -114,6 +122,23 @@ export default function GameCard({ game, onDragStart, onDragEnd, onClick, onArch
         e.currentTarget.style.borderColor = isDone ? '#3db86a' : isUrgent ? '#dc3c3c' : tt ? tt.border : customColor ? customColor : (genreColor || '#66c0f4');
       }}
     >
+      {/* ── Dimensionnement de la zone image ────────────────────────────────
+          Deux modes exclusifs, headerAspect prioritaire :
+          • headerHeight : hauteur FIXE en px. L'image est recadrée en
+            objectFit:cover pour la remplir. Fragile dès que la largeur de la
+            carte varie — une bannière Steam fait 460x215 (ratio ~2.14), donc
+            une hauteur fixe rogne en haut/bas sur une colonne large et à
+            gauche/droite sur une colonne étroite.
+          • headerAspect : ratio largeur/hauteur. La hauteur suit la largeur
+            réelle de la carte, donc l'image n'est JAMAIS rognée, quelle que
+            soit la largeur de la colonne (le panneau Échéances de l'accueil
+            est redimensionnable via son séparateur, cf. App.jsx).
+            L'alignement des rangées reste garanti : la grille
+            (repeat(auto-fill, minmax(...), 1fr)) donne à toutes les cartes
+            d'une rangée la même largeur, donc la même hauteur d'image.
+          Les placeholders (pas d'image, carte custom, jeu sans bannière)
+          utilisent le MÊME dimensionnement — sinon une carte sans image serait
+          plus courte que ses voisines et casserait l'alignement. */}
       {/* ── Image area — masquée en mode compact ── */}
       {!compact && isCustom && tt ? (
         <div style={{ width: '100%', position: 'relative' }}>
@@ -123,11 +148,11 @@ export default function GameCard({ game, onDragStart, onDragEnd, onClick, onArch
               src={tt.img}
               alt={tt.label}
               onError={() => setTtImgError(true)}
-              style={{ width: '100%', height: headerHeight ? headerHeight : 'auto', objectFit: headerHeight ? 'cover' : undefined, display: 'block' }}
+              style={headerImgStyle}
             />
           ) : (
             <div style={{
-              width: '100%', height: headerHeight ?? 88,
+              ...headerBox,
               background: 'linear-gradient(135deg, #111 0%, #1a1a1a 100%)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
@@ -160,7 +185,7 @@ export default function GameCard({ game, onDragStart, onDragEnd, onClick, onArch
         </div>
       ) : !compact && isCustom ? (
         <div style={{
-          width: '100%', height: headerHeight ?? 88, position: 'relative',
+          ...headerBox, position: 'relative',
           background: customColor
             ? `linear-gradient(135deg, ${customColor}30 0%, ${customColor}18 50%, ${customColor}08 100%)`
             : 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
@@ -190,7 +215,7 @@ export default function GameCard({ game, onDragStart, onDragEnd, onClick, onArch
           <img
             src={game.header_img} alt={game.name}
             onError={() => setImgError(true)}
-            style={{ width: '100%', height: headerHeight ? headerHeight : 'auto', objectFit: headerHeight ? 'cover' : undefined, display: 'block' }}
+            style={headerImgStyle}
             draggable={false}
           />
           {isUrgent && !isArchived && (
@@ -213,7 +238,7 @@ export default function GameCard({ game, onDragStart, onDragEnd, onClick, onArch
         </div>
       ) : !compact ? (
         <div style={{
-          width: '100%', height: headerHeight ?? 88, position: 'relative', background: 'var(--steam)',
+          ...headerBox, position: 'relative', background: 'var(--steam)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24,
         }}>
           🎮
