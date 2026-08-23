@@ -2235,15 +2235,42 @@ async function getLibraryNews(userId, force = false) {
   return data;
 }
 
+// Normalisation pour le filtre : minuscules + suppression des diacritiques.
+// Doit rester le JUMEAU EXACT de matchesFilter() côté front (utils.js) — même
+// décomposition NFD, même plage de marques combinantes — sinon le filtre ne
+// donnerait pas les mêmes résultats selon qu'il s'applique au serveur (News,
+// paginé) ou au navigateur (boards, échéances, sorties à venir).
+function normalizeForFilter(s) {
+  const decomposed = (s || '').toString().normalize('NFD');
+  let out = '';
+  for (let i = 0; i < decomposed.length; i++) {
+    const code = decomposed.charCodeAt(i);
+    if (code >= 0x0300 && code <= 0x036F) continue; // marque combinante → ignorée
+    out += decomposed[i];
+  }
+  return out.toLowerCase();
+}
+
 app.get('/api/steam/library/news', requireAuth, async (req, res) => {
   const creds = getUserSteamCreds(req.user.id);
   if (!creds.apiKey || !creds.steamId) return res.status(400).json({ error: 'No Steam credentials configured' });
   const offset = Math.max(0, parseInt(req.query.offset) || 0);
   const limit  = Math.min(50, Math.max(1, parseInt(req.query.limit) || 20));
+  const q      = normalizeForFilter(req.query.q || '').trim();
   try {
     const all = await getLibraryNews(req.user.id, req.query.force === '1');
-    const items = all.slice(offset, offset + limit);
-    res.json({ items, total: all.length, hasMore: offset + limit < all.length });
+    // Le filtre est appliqué AVANT la pagination, sur la liste complète en cache
+    // (plafonnée à LIBRARY_NEWS_MAX_ITEMS). Auparavant il n'existait que côté
+    // front, sur les seules pages déjà chargées : filtrer réduisait la liste,
+    // le conteneur cessait de déborder, le scroll infini ne se déclenchait donc
+    // plus et le filtre ne dépassait jamais les 20 premières news.
+    // Champs testés : nom du jeu et titre de la news (pas le résumé), à
+    // l'identique de l'ancien prédicat front.
+    const filtered = q
+      ? all.filter(it => normalizeForFilter(it.gameName).includes(q) || normalizeForFilter(it.title).includes(q))
+      : all;
+    const items = filtered.slice(offset, offset + limit);
+    res.json({ items, total: filtered.length, hasMore: offset + limit < filtered.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

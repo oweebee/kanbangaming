@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useLang } from '../i18n.js';
-import { authHeaders, formatDateShort, matchesFilter } from '../utils.js';
+// matchesFilter n'est plus importé : le filtre de ce panneau est appliqué
+// côté serveur (voir /api/steam/library/news), pas sur les pages déjà chargées.
+import { authHeaders, formatDateShort } from '../utils.js';
 import { genreColor, isSteamAccessBlocked, SteamAccessNotice, SteamGlyph, Tag } from './SteamUI.jsx';
 
 const API = '/api';
@@ -16,18 +18,32 @@ export default function LibraryNewsPanel({ token, personaName, currentUser, filt
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState('');
   const [noSteam, setNoSteam] = useState(false);
+  const [total, setTotal] = useState(0);
   const itemsLenRef = useRef(0);
   itemsLenRef.current = items.length;
+
+  // Filtre appliqué par le serveur (voir /api/steam/library/news). On le
+  // débounce : sans ça, chaque frappe relancerait une requête + un rechargement
+  // complet de la première page.
+  const [debouncedFilter, setDebouncedFilter] = useState(filterText);
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedFilter(filterText), 250);
+    return () => clearTimeout(id);
+  }, [filterText]);
 
   const h = authHeaders(token);
 
   const fetchPage = useCallback(async (offset, force = false) => {
-    const url = `${API}/steam/library/news?offset=${offset}&limit=${PAGE_SIZE}${force ? '&force=1' : ''}`;
+    const q = debouncedFilter.trim();
+    const url = `${API}/steam/library/news?offset=${offset}&limit=${PAGE_SIZE}${force ? '&force=1' : ''}${q ? `&q=${encodeURIComponent(q)}` : ''}`;
     const res = await fetch(url, { headers: h });
     if (res.status === 400) { setNoSteam(true); return { items: [], hasMore: false }; }
     if (!res.ok) throw new Error('Erreur API');
     return res.json();
-  }, [token]);
+    // debouncedFilter fait partie des dépendances : changer le filtre doit
+    // reconstruire fetchPage, donc loadInitial, donc relancer depuis l'offset 0
+    // via l'effet ci-dessous (la pagination du filtre précédent n'a plus de sens).
+  }, [token, debouncedFilter]);
 
   const loadInitial = useCallback(async (force = false) => {
     setLoading(true); setError(''); setNoSteam(false);
@@ -35,6 +51,7 @@ export default function LibraryNewsPanel({ token, personaName, currentUser, filt
       const data = await fetchPage(0, force);
       setItems(data.items || []);
       setHasMore(!!data.hasMore);
+      setTotal(data.total ?? (data.items || []).length);
     } catch (e) {
       setError(t('libnews.load_error'));
     } finally {
@@ -53,6 +70,7 @@ export default function LibraryNewsPanel({ token, personaName, currentUser, filt
       const data = await fetchPage(itemsLenRef.current);
       setItems(prev => [...prev, ...(data.items || [])]);
       setHasMore(!!data.hasMore);
+      setTotal(data.total ?? 0);
     } catch {
       // silencieux : nouvelle tentative au prochain scroll
     } finally {
@@ -65,9 +83,14 @@ export default function LibraryNewsPanel({ token, personaName, currentUser, filt
     if (el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_THRESHOLD) loadMore();
   };
 
-  // Filtre nom du jeu OU titre de la news — match sur l'un des deux suffit.
-  const visibleItems = items.filter(item => matchesFilter(item.gameName, filterText) || matchesFilter(item.title, filterText));
-  const noMatch = items.length > 0 && visibleItems.length === 0;
+  // Le filtre (nom du jeu OU titre de la news) est désormais appliqué par le
+  // serveur sur la liste COMPLÈTE avant pagination — cf. /api/steam/library/news.
+  // items ne contient donc déjà que des résultats pertinents : plus de second
+  // filtrage ici, qui masquerait des éléments sans jamais pouvoir en charger
+  // davantage (c'était le bug : le filtre ne dépassait pas la 1re page).
+  const visibleItems = items;
+  const filterActive = !!debouncedFilter.trim();
+  const noMatch = filterActive && items.length === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -78,9 +101,12 @@ export default function LibraryNewsPanel({ token, personaName, currentUser, filt
             <path d="M4 4h12v12H4z"/><path d="M16 8h4v10a2 2 0 0 1-2 2H6"/><line x1="7" y1="7" x2="13" y2="7"/><line x1="7" y1="10" x2="13" y2="10"/><line x1="7" y1="13" x2="10" y2="13"/>
           </svg>
           {personaName ? t('libnews.header_named', { name: personaName }) : t('libnews.header')}
+          {/* total renvoyé par l'API = nombre de news correspondant au filtre sur
+              la liste entière, pas seulement sur les pages chargées. Avant, ce
+              compteur n'affichait que les résultats de la 1re page. */}
           {!loading && !noSteam && items.length > 0 && (
             <span style={{ fontSize: 10, color: 'var(--text-muted)', background: 'var(--surface2)', borderRadius: 99, padding: '1px 6px', fontWeight: 600 }}>
-              {visibleItems.length}
+              {total || visibleItems.length}
             </span>
           )}
           {!noSteam && (
@@ -136,11 +162,15 @@ export default function LibraryNewsPanel({ token, personaName, currentUser, filt
           </div>
         )}
 
-        {!loading && !noSteam && !error && items.length === 0 && steamBlocked && (
+        {/* Les deux états "vide" ci-dessous ne concernent que l'absence réelle de
+            news. Un filtre actif sans résultat a son propre message (noMatch),
+            sinon on afficherait "aucune news" alors qu'il y en a, simplement
+            aucune qui corresponde. */}
+        {!loading && !noSteam && !error && items.length === 0 && !filterActive && steamBlocked && (
           <SteamAccessNotice />
         )}
 
-        {!loading && !noSteam && !error && items.length === 0 && !steamBlocked && (
+        {!loading && !noSteam && !error && items.length === 0 && !filterActive && !steamBlocked && (
           <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
             <div style={{ fontSize: 28, marginBottom: 8 }}>📰</div>
             {t('libnews.empty')}
