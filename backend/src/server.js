@@ -2122,7 +2122,14 @@ const LIBRARY_NEWS_MAX_ITEMS    = 300; // cap mémoire de la liste agrégée
 // caches de cette section qui sont par userId. Évite de re-demander l'API
 // Store à chaque fois qu'un même jeu apparaît pour un autre utilisateur.
 // Le nom n'est utile que pour les jeux wishlist (pas de libEntry.name).
-const appGenreCache = new Map(); // appid → { genres, name, fetchedAt }
+// headerImage est également mémorisé ici : Steam a migré ses visuels vers des
+// URLs à chemin haché (shared.akamai.steamstatic.com/store_item_assets/steam/
+// apps/<id>/<hash>/header.jpg). L'ancienne forme devinable à partir du seul
+// appid (cdn.cloudflare.steamstatic.com/steam/apps/<id>/header.jpg) ne résout
+// plus pour les jeux récents, d'où des vignettes vides dans les News. On prend
+// donc l'URL que Steam nous donne (filters=basic contient header_image) au lieu
+// de la reconstruire nous-mêmes.
+const appGenreCache = new Map(); // appid → { genres, name, headerImage, fetchedAt }
 const APP_GENRE_TTL = 24 * 60 * 60 * 1000; // 24h (un genre/nom ne change quasi jamais)
 
 async function getAppInfoForAppids(appids) {
@@ -2141,11 +2148,11 @@ async function getAppInfoForAppids(appids) {
       const data = await r.json();
       const info = data?.[id]?.data;
       const genres = (info?.genres || []).map(g => g.description).slice(0, 3);
-      return { id, genres, name: info?.name || null };
+      return { id, genres, name: info?.name || null, headerImage: info?.header_image || null };
     }));
     for (const s of settled) {
       if (s.status === 'fulfilled') {
-        const entry = { genres: s.value.genres, name: s.value.name, fetchedAt: now };
+        const entry = { genres: s.value.genres, name: s.value.name, headerImage: s.value.headerImage, fetchedAt: now };
         appGenreCache.set(s.value.id, entry);
         out.set(s.value.id, entry);
       }
@@ -2203,6 +2210,9 @@ async function getLibraryNews(userId, force = false) {
         appid: id,
         gameName: libEntry?.name || '', // complété ci-dessous pour les jeux wishlist (pas de libEntry)
         inLibrary: !!libEntry, // false = jeu wishlist pas encore possédé → tag "Wishlist" côté frontend
+        // Provisoire : remplacé juste en dessous par l'URL officielle renvoyée
+        // par Steam quand elle est disponible. Cette forme devinable reste le
+        // dernier recours (jeux anciens, ou appdetails en échec).
         headerImage: `https://cdn.cloudflare.steamstatic.com/steam/apps/${id}/header.jpg`,
         gid: n.gid,
         title: n.title,
@@ -2224,6 +2234,9 @@ async function getLibraryNews(userId, force = false) {
       const info = infoMap.get(it.appid);
       it.genres = info?.genres || [];
       if (!it.gameName) it.gameName = info?.name || '';
+      // URL d'image officielle Steam si connue — sinon on garde la forme
+      // devinable posée plus haut (cf. commentaire sur appGenreCache).
+      if (info?.headerImage) it.headerImage = info.headerImage;
     }
   } catch {
     for (const it of items) it.genres = it.genres || [];
