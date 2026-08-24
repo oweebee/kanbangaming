@@ -76,6 +76,26 @@ function useMobile() {
   return mobile;
 }
 
+// Détecte le mode PWA installée (standalone) — PAS juste "écran étroit" (isMobile
+// ci-dessus se base sur la largeur et vaut aussi true dans un onglet mobile
+// classique). display-mode:standalone couvre Android (Chrome/WebView) ; iOS
+// Safari ne l'expose pas et utilise à la place navigator.standalone (API dépréciée
+// mais toujours seule solution fiable sur iOS ajouté à l'écran d'accueil).
+function useIsPWA() {
+  const detect = () => (
+    (typeof window !== 'undefined' && window.matchMedia?.('(display-mode: standalone)').matches) ||
+    (typeof navigator !== 'undefined' && navigator.standalone === true)
+  );
+  const [isPWA, setIsPWA] = useState(detect);
+  useEffect(() => {
+    const mq = window.matchMedia('(display-mode: standalone)');
+    const h = () => setIsPWA(detect());
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
+  }, []);
+  return isPWA;
+}
+
 // ── Helpers boards ────────────────────────────────────────────────────────────
 function getSteamAppId(gameIconUrl) {
   return gameIconUrl?.match(/apps\/(\d+)\//)?.[1] || null;
@@ -260,6 +280,7 @@ function getSavedAuth() {
 }
 export default function App() {
   const isMobile = useMobile();
+  const isPWA = useIsPWA();
   const { t, lang } = useLang();
 
   // Auth
@@ -2306,7 +2327,16 @@ export default function App() {
             </aside>
           </>
         )}
-        <header style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        {/* zoom (pas transform:scale) : même technique que zoom.js pour l'échelle
+            globale de l'app — zoom agrandit réellement la boîte dans le flux
+            (donc la hauteur du header grandit d'elle-même, tous les boutons
+            avec) et ne crée pas de containing block pour les éléments
+            position:fixed (le footer plus bas resterait ancré à l'écran avec
+            transform:scale, ce qui n'est pas le cas ici). Cible précisément le
+            mode PWA installée (isPWA), pas juste un écran étroit — un onglet
+            mobile classique garde la taille normale, seule l'app installée
+            (où les zones de tap sont sinon trop petites au doigt) est agrandie. */}
+        <header style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, zoom: isPWA ? 1.2 : 1 }}>
           <button onClick={() => setShowDrawer(true)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 20, cursor: 'pointer', lineHeight: 1, flexShrink: 0 }}>☰</button>
           {publicBoardMode ? (
             <>
@@ -2355,6 +2385,19 @@ export default function App() {
               )}
             </>
           )}
+          {/* Filtre + Loupe — mêmes composants et même logique de bascule que sur
+              desktop (voir plus bas, header desktop) : absents jusqu'ici du header
+              mobile, alors que MobileBoard/MobileHomeSlider savent déjà appliquer
+              filterText — il manquait uniquement le bouton pour le renseigner.
+              Placés en dernier dans la ligne d'icônes : le titre juste avant
+              (troncature "…" déjà en place) absorbe le rétrécissement sur petit
+              écran plutôt que de pousser ces boutons hors champ. */}
+          {showHome && !publicBoardMode ? (
+            <FilterField value={homeFilterText} onChange={setHomeFilterText} title={t('filter.title')} placeholder={t('filter.placeholder')} />
+          ) : (activeBoardId || publicBoardMode) ? (
+            <FilterField value={cardFilterText} onChange={setCardFilterText} title={t('filter.title')} placeholder={t('filter.placeholder')} />
+          ) : null}
+          <GlobalSearch token={token} onGoToBoard={handleSearchGoToBoard} onOpenGame={handleSearchOpenGame} />
         </header>
         {showHome && !publicBoardMode ? (
           mobileHomeView
