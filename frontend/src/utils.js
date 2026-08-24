@@ -122,12 +122,26 @@ export function hexToRgba(hex, alpha = 1) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+// Ponctuation ignorée par matchesFilter (et son jumeau backend normalizeForFilter,
+// server.js) : sigles pointés ("S.T.A.L.K.E.R." → "stalker"), apostrophes
+// ("Marvel's Spider-Man" → "marvels spiderman"), tirets, guillemets… Les ESPACES
+// ne sont volontairement PAS dans cette liste : "Dune Awakening" tapé sans les
+// deux mots collés ne doit pas matcher "Dune: Awakening" comme un seul bloc — on
+// veut de l'approximatif sur la PONCTUATION, pas une recherche floue générale qui
+// remonterait trop de bruit.
+const FILTER_PUNCT_RE = /[.,:;'’‘`"“”«»_()[\]{}!?-]/g;
+
 /**
  * Test de correspondance pour le champ Filtre (FilterField.jsx) — insensible à la
- * casse et aux accents (ex: "zelda" matche "Zeldä"). Une chaîne de filtre vide ou
- * blanche ne filtre rien (tout correspond). Partagé par toute l'app (accueil,
- * sidebar, boards, news, jeux à venir) pour garantir un comportement identique
- * partout sans dupliquer la logique.
+ * casse, aux accents (ex: "zelda" matche "Zeldä") et à la ponctuation (ex:
+ * "stalker" matche "S.T.A.L.K.E.R."). Une chaîne de filtre vide ou blanche ne
+ * filtre rien (tout correspond). Partagé par toute l'app (accueil, sidebar,
+ * boards, news, jeux à venir) pour garantir un comportement identique partout
+ * sans dupliquer la logique.
+ * IMPORTANT : tenu identique à normalizeForFilter() dans backend/src/server.js
+ * (utilisé par la recherche globale /api/search et le filtre News paginé) — les
+ * deux DOIVENT rester en phase, sinon "stalker" trouverait S.T.A.L.K.E.R. dans un
+ * board mais pas dans la recherche globale, ou l'inverse.
  */
 export function matchesFilter(text, filterText) {
   if (!filterText || !filterText.trim()) return true;
@@ -142,7 +156,7 @@ export function matchesFilter(text, filterText) {
       const code = decomposed.charCodeAt(i);
       if (code < 0x0300 || code > 0x036f) out += decomposed[i];
     }
-    return out.toLowerCase();
+    return out.toLowerCase().replace(FILTER_PUNCT_RE, '');
   };
   return norm(text).includes(norm(filterText.trim()));
 }

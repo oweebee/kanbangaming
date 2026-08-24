@@ -458,7 +458,14 @@ app.get('/api/deadlines', requireAuth, (req, res) => {
 // ── Global search ─────────────────────────────────────────────────────────────
 
 app.get('/api/search', requireAuth, (req, res) => {
-  const q = (req.query.q || '').toLowerCase().trim();
+  // normalizeForFilter (accents + ponctuation, cf. sa définition plus bas dans ce
+  // fichier — hoistée) au lieu d'un simple toLowerCase() : avant, taper "stalker"
+  // ne trouvait pas "S.T.A.L.K.E.R." (les points cassaient le match substring), et
+  // un nom accentué ("Café Noir") ne remontait pas sur une recherche sans accent.
+  // Avant ce changement, /api/search était le SEUL des trois points de filtre/
+  // recherche de l'app à ne rien normaliser du tout.
+  const qRaw = (req.query.q || '').trim(); // conservée pour l'aperçu de note ci-dessous
+  const q = normalizeForFilter(qRaw);
   if (!q || q.length < 2) return res.json([]);
 
   const results = [];
@@ -473,7 +480,7 @@ app.get('/api/search', requireAuth, (req, res) => {
     const boardIcon = board.gameIcon || null;
     const boardHeaderImg = resolveBoardHeaderImg(board);
 
-    if (boardName.toLowerCase().includes(q)) {
+    if (normalizeForFilter(boardName).includes(q)) {
       results.push({ type: 'board', boardId, boardName, boardIcon, boardHeaderImg, matchedIn: 'board', ...extra });
     }
 
@@ -481,7 +488,7 @@ app.get('/api/search', requireAuth, (req, res) => {
       const gameName = game.name || '';
       const gameImg = game.header_img || game.icon_img || null;
 
-      if (gameName.toLowerCase().includes(q)) {
+      if (normalizeForFilter(gameName).includes(q)) {
         results.push({ type: 'game', boardId, boardName, boardIcon, gameId, gameName, gameImg, matchedIn: 'name', ...extra });
         continue;
       }
@@ -489,8 +496,18 @@ app.get('/api/search', requireAuth, (req, res) => {
       const notes = game.notes || [];
       for (const note of notes) {
         const noteText = typeof note === 'string' ? note : (note.text || '');
-        if (noteText.toLowerCase().includes(q)) {
-          const idx = noteText.toLowerCase().indexOf(q);
+        if (normalizeForFilter(noteText).includes(q)) {
+          // Position de découpe pour l'aperçu : NE PAS utiliser un index calculé
+          // sur le texte normalisé — sa longueur diverge de noteText dès qu'il y a
+          // de la ponctuation retirée avant le terme trouvé, ce qui décale la
+          // fenêtre et coupe l'aperçu au mauvais endroit. On retente donc d'abord
+          // une recherche simple (sans normalisation) sur le texte original, qui
+          // couvre le cas courant (terme tapé tel quel) avec un découpage exact ;
+          // seul le cas "match dû UNIQUEMENT à l'accent/la ponctuation retirés"
+          // retombe sur un aperçu depuis le début de la note plutôt qu'un
+          // découpage à une position fausse.
+          const rawIdx = noteText.toLowerCase().indexOf(qRaw.toLowerCase());
+          const idx = rawIdx !== -1 ? rawIdx : 0;
           const start = Math.max(0, idx - 30);
           const preview = (start > 0 ? '…' : '') + noteText.slice(start, idx + q.length + 60);
           results.push({ type: 'game', boardId, boardName, boardIcon, gameId, gameName, gameImg, matchedIn: 'note', notePreview: preview, ...extra });
@@ -2248,11 +2265,19 @@ async function getLibraryNews(userId, force = false) {
   return data;
 }
 
-// Normalisation pour le filtre : minuscules + suppression des diacritiques.
+// Normalisation pour le filtre ET la recherche globale (/api/search) : minuscules
+// + suppression des diacritiques + suppression d'une liste de ponctuation.
 // Doit rester le JUMEAU EXACT de matchesFilter() côté front (utils.js) — même
-// décomposition NFD, même plage de marques combinantes — sinon le filtre ne
-// donnerait pas les mêmes résultats selon qu'il s'applique au serveur (News,
-// paginé) ou au navigateur (boards, échéances, sorties à venir).
+// décomposition NFD, même plage de marques combinantes, même liste de
+// ponctuation — sinon un même terme donnerait des résultats différents selon
+// qu'il passe par le serveur (News paginé, recherche globale) ou le navigateur
+// (boards, échéances, sorties à venir). Grâce à cette normalisation, taper
+// "stalker" trouve "S.T.A.L.K.E.R." et "spiderman" trouve "Spider-Man" —
+// fonction hoistée (function declaration), donc utilisable par /api/search plus
+// haut dans ce fichier malgré sa définition ici.
+// Note : les ESPACES ne sont volontairement pas dans la liste de ponctuation
+// retirée — voir le commentaire équivalent dans utils.js pour la raison.
+const FILTER_PUNCT_RE = /[.,:;'’‘`"“”«»_()[\]{}!?-]/g;
 function normalizeForFilter(s) {
   const decomposed = (s || '').toString().normalize('NFD');
   let out = '';
@@ -2261,7 +2286,7 @@ function normalizeForFilter(s) {
     if (code >= 0x0300 && code <= 0x036F) continue; // marque combinante → ignorée
     out += decomposed[i];
   }
-  return out.toLowerCase();
+  return out.toLowerCase().replace(FILTER_PUNCT_RE, '');
 }
 
 app.get('/api/steam/library/news', requireAuth, async (req, res) => {
