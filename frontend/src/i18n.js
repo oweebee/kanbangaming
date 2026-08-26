@@ -778,6 +778,7 @@ fr: {
   'type.waiting':      'Attente',
 
   // Emoji picker
+  'emoji.search_ph':   'Rechercher un emoji…',
   'emoji.recent':      'Favoris',
 },
 
@@ -1443,6 +1444,7 @@ en: {
   'type.waiting':      'Waiting',
 
   // Emoji picker
+  'emoji.search_ph':   'Search emoji…',
   'emoji.recent':      'Favorites',
 },
 
@@ -2108,6 +2110,7 @@ es: {
   'type.waiting':      'Espera',
 
   // Emoji picker
+  'emoji.search_ph':   'Buscar un emoji…',
   'emoji.recent':      'Favoritos',
 },
 
@@ -2773,6 +2776,7 @@ de: {
   'type.waiting':      'Warten',
 
   // Emoji picker
+  'emoji.search_ph':   'Emoji suchen…',
   'emoji.recent':      'Favoriten',
 },
 
@@ -3438,6 +3442,7 @@ ru: {
   'type.waiting':      'Ожидание',
 
   // Emoji picker
+  'emoji.search_ph':   'Найти эмодзи…',
   'emoji.recent':      'Избранное',
 },
 
@@ -4103,6 +4108,7 @@ zh: {
   'type.waiting':      '等待',
 
   // Emoji picker
+  'emoji.search_ph':   '搜索表情…',
   'emoji.recent':      '收藏',
 },
 

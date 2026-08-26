@@ -7,6 +7,8 @@
 // à la fois, sans rien dupliquer.
 import { useState, useRef, useEffect } from 'react';
 import { useLang } from '../i18n.js';
+import { matchesFilter } from '../utils.js';
+import { EMOJI_KEYWORDS } from '../emojiKeywords.js';
 
 export const EMOJI_CATS = [
   { label: '🎮 Gaming', emojis: ['🎮','🕹️','👾','🎲','🃏','🧩','🎯','🏹','⚔️','🗡️','🛡️','🪃','🔫','💣','🧲','🪄','🎪','🎡','🎠','🎢'] },
@@ -61,9 +63,12 @@ export function EmojiPicker({
 }) {
   const { t } = useLang();
   const ref = useRef();
+  const searchRef = useRef();
   const floating = !!anchorEl;
   const [coords, setCoords] = useState({ left: -9999, top: -9999 });
   const [recent, setRecent] = useState(() => loadRecentEmojis());
+  const [search, setSearch] = useState('');
+  const searching = !!search.trim();
 
   useEffect(() => {
     if (!floating) return;
@@ -101,7 +106,18 @@ export function EmojiPicker({
     textTransform: 'uppercase', letterSpacing: catLetterSpacing,
     marginBottom: catLabelMarginBottom, paddingLeft: 2, opacity: catOpacity,
   };
-  const recentToShow = recent.slice(0, columns * 2);
+  // Correspondance emoji ↔ mots-clés : EMOJI_KEYWORDS (généré depuis Unicode
+  // CLDR, cf. emojiKeywords.js) concatène le nom de l'emoji dans les 6 langues
+  // supportées par l'app — la recherche fonctionne donc quelle que soit la
+  // langue tapée, indépendamment de la langue actuellement affichée. matchesFilter
+  // est le même prédicat que le champ Filtre (accents + ponctuation ignorés),
+  // pour un comportement de recherche cohérent avec le reste de l'app.
+  const emojiMatches = (e) => matchesFilter(EMOJI_KEYWORDS[e] || '', search);
+  const recentToShow = (searching ? recent.filter(emojiMatches) : recent).slice(0, columns * 2);
+  const filteredCats = searching
+    ? EMOJI_CATS.map(cat => ({ ...cat, emojis: cat.emojis.filter(emojiMatches) })).filter(cat => cat.emojis.length > 0)
+    : EMOJI_CATS;
+  const noResults = searching && recentToShow.length === 0 && filteredCats.length === 0;
 
   return (
     <div ref={ref} style={floating ? {
@@ -125,6 +141,39 @@ export function EmojiPicker({
           <button onClick={() => handleSelect('')} style={{ ...btnStyle(''), width: 'auto', padding: '0 10px', fontSize: 11, color: 'var(--text-muted)' }}>{clearLabel}</button>
         </div>
       )}
+      {/* Recherche — filtre EMOJI_CATS + les favoris par mots-clés multilingues
+          (emojiKeywords.js). autoFocus uniquement en mode flottant : en mode
+          inline le picker peut apparaître dans un flux où voler le focus au
+          clavier serait indésirable (comportement pré-existant du composant,
+          qui ne gérait déjà aucun focus automatique). */}
+      <div style={{ position: 'relative', marginBottom: catMarginBottom }}>
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="var(--text-muted)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+          style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        <input
+          ref={searchRef}
+          type="text"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder={t('emoji.search_ph')}
+          autoFocus={floating}
+          style={{
+            width: '100%', boxSizing: 'border-box', padding: '6px 8px 6px 26px',
+            background: 'var(--surface1)', border: '1px solid var(--border)', borderRadius: 6,
+            color: 'var(--text)', fontSize: 12,
+          }}
+        />
+        {search && (
+          <button
+            onClick={() => { setSearch(''); searchRef.current?.focus(); }}
+            title={t('steam.clear') /* clé "Effacer" déjà traduite dans les 6 langues, réutilisée telle quelle */}
+            style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 4, display: 'flex' }}
+          >
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        )}
+      </div>
       {recentToShow.length > 0 && (
         <div style={{ marginBottom: catMarginBottom }}>
           <div style={catLabelStyle}>{t('emoji.recent')}</div>
@@ -135,7 +184,7 @@ export function EmojiPicker({
           </div>
         </div>
       )}
-      {EMOJI_CATS.map(cat => (
+      {filteredCats.map(cat => (
         <div key={cat.label} style={{ marginBottom: catMarginBottom }}>
           <div style={catLabelStyle}>{cat.label}</div>
           <div style={{ display: 'grid', gridTemplateColumns: `repeat(${columns}, 1fr)`, gap }}>
@@ -145,6 +194,11 @@ export function EmojiPicker({
           </div>
         </div>
       ))}
+      {noResults && (
+        <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, padding: '16px 4px' }}>
+          {t('filter.no_results')}
+        </div>
+      )}
     </div>
   );
 }
