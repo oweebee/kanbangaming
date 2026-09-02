@@ -1038,7 +1038,7 @@ export default function App() {
   const toggleBoardPublic = async (boardId, isPublic) => {
     try {
       const res = await fetch(`${API}/boards/${boardId}`, { method: 'PATCH', headers: authHeaders(token), body: JSON.stringify({ public: isPublic }) });
-      if (!res.ok) { alert(t('err.board_visibility', { code: res.status })); return; }
+      if (!res.ok) { alert(t('err.board_visibility', { code: res.status })); return false; }
       setBoards(prev => prev.map(b => b.id === boardId ? { ...b, public: isPublic } : b));
       // Un board qu'on repasse en privé doit ressortir immédiatement de "Mes boards" :
       // sortedBoards masque tout board présent dans favBoards (suivi), et rien ne
@@ -1046,9 +1046,30 @@ export default function App() {
       // public restait donc invisible partout (ni "Mes boards", ni "Boards publics
       // suivis" puisqu'il n'est plus public serveur) jusqu'au prochain rechargement complet.
       if (!isPublic) setFavBoards(prev => prev.filter(b => b.id !== boardId));
+      return true;
     } catch (e) {
       alert(t('err.board_visibility_network'));
+      return false;
     }
+  };
+
+  // Repasser en prive un board public dont JE suis le proprietaire, depuis la vue
+  // "board public" — celle sur laquelle on atterrit forcement quand on suit son
+  // propre board (sortedBoards l'exclut alors de "Mes boards"). Le badge "Public"
+  // de cette vue n'etait qu'un span decoratif : seul celui de la vue board perso
+  // etait cliquable. Resultat : plus aucun chemin pour repasser le board en prive
+  // sans d'abord le retirer des suivis.
+  const makePublicBoardPrivate = async () => {
+    if (!publicBoardMode || !isOwnPublicBoard) return;
+    const id = publicBoardMode.id;
+    const ok = await toggleBoardPublic(id, false);
+    if (!ok) return;
+    // Le board n'est plus public : rester en publicBoardMode taperait des routes
+    // /api/public/* qui repondent desormais 404. On bascule sur la vue perso
+    // (les effets sur activeBoardId rechargent colonnes et cartes).
+    setPublicBoardMode(null);
+    setActiveBoardId(id);
+    setShowHome(false);
   };
 
   const deleteBoard = async (boardId) => {
@@ -1367,16 +1388,26 @@ export default function App() {
       })
     : boards;
 
-  // Un de mes boards passé en public ET que je suis (suivi) ne doit plus apparaître
-  // dans "Épinglés"/"Mes boards" : il vit désormais uniquement dans "Boards publics
-  // suivis" — même logique que l'épinglage, qui retire déjà un board de "Mes boards"
-  // pour l'afficher dans sa propre section.
-  const myFollowedPublicIds = new Set(favBoards.map(f => f.id));
-  const sortedBoards = sortedBoardsRaw.filter(b => !myFollowedPublicIds.has(b.id));
+  // Un board que J'AI CREE reste TOUJOURS dans "Mes boards"/"Epingles", avec ses
+  // controles de proprietaire (public/prive, suppression), meme si je le suis aussi.
+  // Avant, tout board suivi etait retire de "Mes boards" ; or /api/boards ne renvoie
+  // QUE mes propres boards, donc ce filtre ne retirait jamais que les miens : suivre
+  // son propre board le faisait disparaitre de "Mes boards" et reapparaitre comme un
+  // board "de quelqu'un d'autre", sans plus aucun moyen de le repasser en prive.
+  const ownBoardIds = new Set(sortedBoardsRaw.map(b => b.id));
+  const sortedBoards = sortedBoardsRaw;
 
-  // Public boards split: followed vs non-followed
-  const followedPublicBoards = homePublicBoards.filter(b => favBoards.some(f => f.id === b.id));
-  const nonFollowedPublicBoards = homePublicBoards.filter(b => !favBoards.some(f => f.id === b.id));
+  // La de-duplication se fait donc dans l'autre sens : les sections "suivis"
+  // n'affichent que les boards des AUTRES. isOwner vient du backend
+  // (getPublicBoardPermissions) ; ownBoardIds sert de second garde-fou local pour
+  // eviter un affichage transitoire avant l'arrivee des permissions.
+  const isFollowedFromOthers = (b) => !b.isOwner && !ownBoardIds.has(b.id);
+  const followedOtherIds = new Set(favBoards.filter(isFollowedFromOthers).map(f => f.id));
+
+  // Public boards split: followed (des autres) vs le reste. Complementaires : mon
+  // propre board public reste liste dans "Boards publics", suivi ou non.
+  const followedPublicBoards = homePublicBoards.filter(b => followedOtherIds.has(b.id));
+  const nonFollowedPublicBoards = homePublicBoards.filter(b => !followedOtherIds.has(b.id));
 
   const handleBoardDrop = (targetId) => {
     if (!boardDragId || boardDragId === targetId) { setBoardDragId(null); setBoardDragOverId(null); return; }
@@ -1393,9 +1424,10 @@ export default function App() {
     setBoardDragId(null); setBoardDragOverId(null);
   };
 
-  // Sorted favBoards (respects drag order)
+  // Sorted favBoards (respects drag order) — restreint aux boards des autres
+  const followedOtherBoards = favBoards.filter(isFollowedFromOthers);
   const sortedFavBoards = favOrder.length > 0
-    ? [...favBoards].sort((a, b) => {
+    ? [...followedOtherBoards].sort((a, b) => {
         const ai = favOrder.indexOf(a.id);
         const bi = favOrder.indexOf(b.id);
         if (ai === -1 && bi === -1) return 0;
@@ -1403,7 +1435,7 @@ export default function App() {
         if (bi === -1) return -1;
         return ai - bi;
       })
-    : favBoards;
+    : followedOtherBoards;
 
   // Boards publics suivis ET epingles : ils remontent dans la section "Epingles"
   // en haut du menu et sont retires de la section "suivis" en bas (pas de
@@ -1577,7 +1609,7 @@ export default function App() {
                   onContextMenu={e => e.preventDefault()}
                   style={{ opacity: homeDragId === b.id ? 0.4 : 1, outline: homeDragOver === `public_${b.id}` && homeDragId !== b.id ? '2px dashed var(--accent)' : 'none', borderRadius: 12, transition: 'opacity .15s, transform .15s, box-shadow .15s', transform: homeDragId === b.id ? 'rotate(2deg) scale(1.03)' : 'none', boxShadow: homeDragId === b.id ? '0 8px 28px rgba(0,0,0,0.55)' : 'none' }}
                 >
-                  <HomeBoardCard board={b} isPublic isFav={false} onToggleFav={cur => toggleFavorite(b.id, b, cur)} onClick={() => openPublicBoard(b)} typeColor={getBoardTypeColor(b)} isHidden={hiddenBoardIds.has(b.id)} onHide={() => hideBoard(b.id)} onUnhide={() => unhideBoard(b.id)} compact={compactView} />
+                  <HomeBoardCard board={b} isPublic isFav={false} onToggleFav={(b.isOwner || ownBoardIds.has(b.id)) ? undefined : (cur => toggleFavorite(b.id, b, cur))} onClick={() => openPublicBoard(b)} typeColor={getBoardTypeColor(b)} isHidden={hiddenBoardIds.has(b.id)} onHide={() => hideBoard(b.id)} onUnhide={() => unhideBoard(b.id)} compact={compactView} />
                 </div>
               ))}
             </div>
@@ -1856,7 +1888,7 @@ export default function App() {
                 >
                   <HomeBoardCard board={b} isPublic
                     isFav={false}
-                    onToggleFav={(cur) => toggleFavorite(b.id, b, cur)}
+                    onToggleFav={(b.isOwner || ownBoardIds.has(b.id)) ? undefined : ((cur) => toggleFavorite(b.id, b, cur))}
                     onClick={() => openPublicBoard(b)}
                     typeColor={getBoardTypeColor(b)}
                     isHidden={hiddenBoardIds.has(b.id)}
@@ -2203,6 +2235,16 @@ export default function App() {
               >
                 <svg viewBox="0 0 24 24" width="10" height="10" fill="var(--accent)" stroke="var(--accent)" strokeWidth="1.5" style={{ opacity: 0.7 }}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
               </button>
+              {/* Board public — indicatif seulement (non cliquable). Occupe la colonne
+                  du ✕ des boards perso pour que les lignes restent alignees. */}
+              <span
+                title={t('common.public')}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 12, flexShrink: 0, lineHeight: 1 }}
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#3db86a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="10" cy="7" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M15 3.13a4 4 0 0 1 0 7.75"/><path d="M20 21v-2a4 4 0 0 0-3-3.85"/>
+                </svg>
+              </span>
             </div>
           ))}
           </div>
@@ -2342,9 +2384,6 @@ export default function App() {
                 </div>
               )}
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, fontWeight: 700, opacity: hiddenBoardIds.has(b.id) ? 0.45 : 1 }}>{b.name}</span>
-              {/* Ne plus suivre — repasse le board dans "Mes boards" si on en est le créateur
-                  (sortedBoards le réintègre automatiquement dès qu'il sort de favBoards),
-                  ou disparaît simplement de cette section sinon. */}
               {/* Epingler → remonte le board dans la section "Epingles" en haut du menu */}
               <button
                 onClick={e => { e.stopPropagation(); togglePersonalFavorite(b.id, false); }}
@@ -2353,6 +2392,9 @@ export default function App() {
               >
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="var(--text-muted)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
               </button>
+              {/* Ne plus suivre — repasse le board dans "Mes boards" si on en est le créateur
+                  (sortedBoards le réintègre automatiquement dès qu'il sort de favBoards),
+                  ou disparaît simplement de cette section sinon. */}
               <button
                 onClick={e => { e.stopPropagation(); toggleFavorite(b.id, b, true); }}
                 title={t('hbc.unfollow')}
@@ -2360,6 +2402,16 @@ export default function App() {
               >
                 <svg viewBox="0 0 24 24" width="10" height="10" fill="var(--accent)" stroke="var(--accent)" strokeWidth="1.5" style={{ opacity: 0.7 }}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
               </button>
+              {/* Board public — indicatif seulement (non cliquable). Occupe la colonne
+                  du ✕ des boards perso pour que les lignes restent alignees. */}
+              <span
+                title={t('common.public')}
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 12, flexShrink: 0, lineHeight: 1 }}
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#3db86a" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="10" cy="7" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M15 3.13a4 4 0 0 1 0 7.75"/><path d="M20 21v-2a4 4 0 0 0-3-3.85"/>
+                </svg>
+              </span>
             </div>
           ))}
           </div>
@@ -2483,7 +2535,11 @@ export default function App() {
             <>
               <BoardIcon img={publicBoardMode.headerImg || publicBoardMode.gameIcon} emoji={publicBoardMode.emoji} size={30} maxWidth={100} fontSize={20} />
               <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{publicBoardMode.name}</span>
-              <span style={{ fontSize: 10, fontWeight: 700, color: '#3db86a', border: '2px solid #3db86a', borderRadius: 4, padding: '1px 5px', flexShrink: 0 }}>{t('common.public')}</span>
+              <span
+                onClick={isOwnPublicBoard ? makePublicBoardPrivate : undefined}
+                title={isOwnPublicBoard ? t('board.make_private_title') : undefined}
+                style={{ fontSize: 10, fontWeight: 700, color: '#3db86a', border: '2px solid #3db86a', borderRadius: 4, padding: '1px 5px', flexShrink: 0, cursor: isOwnPublicBoard ? 'pointer' : 'default', userSelect: 'none' }}
+              >{t('common.public')}</span>
               <button onClick={toggleCompact} title={t('nav.compact')} style={{ background: compactView ? 'rgba(192,87,10,0.15)' : 'rgba(255,255,255,.06)', border: compactView ? '1px solid var(--accent)' : '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', color: compactView ? 'var(--accent)' : 'var(--text-muted)', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}>⊟</button>
               {archiveCount > 0 && (
                 <button
@@ -2625,7 +2681,10 @@ export default function App() {
               {/* Board name — big, same as personal board */}
               <span style={{ fontWeight: 700, fontSize: 24, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flexShrink: 1 }}>{publicBoardMode.name}</span>
               {/* "Board Public" badge — same style as Public badge on personal boards */}
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#3db86a', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, border: '2px solid #3db86a', borderRadius: 5, padding: '2px 7px' }}>
+              <span
+                onClick={isOwnPublicBoard ? makePublicBoardPrivate : undefined}
+                title={isOwnPublicBoard ? t('board.make_private_title') : undefined}
+                style={{ fontSize: 11, fontWeight: 700, color: '#3db86a', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, border: '2px solid #3db86a', borderRadius: 5, padding: '2px 7px', cursor: isOwnPublicBoard ? 'pointer' : 'default', userSelect: 'none' }}>
                 <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="10" cy="7" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M15 3.13a4 4 0 0 1 0 7.75"/><path d="M20 21v-2a4 4 0 0 0-3-3.85"/>
                 </svg> Public
