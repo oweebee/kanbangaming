@@ -1938,14 +1938,36 @@ async function enrichPlaytime(games, userId) {
 app.get('/api/steam/search', requireAuth, async (req, res) => {
   const { q } = req.query;
   if (!q) return res.status(400).json({ error: 'Missing query' });
+  const url = `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(q)}&l=english&cc=US`;
   try {
-    const data = await steamFetch(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(q)}&l=english&cc=US`);
+    // On n'utilise plus steamFetch() ici : il n'envoie AUCUN header, alors que
+    // tous les autres appels store.steampowered.com du fichier (featured,
+    // appdetails, appreviews, wishlistdata) envoient déjà un UA navigateur.
+    // Alignement de cohérence + log explicite de la cause en cas d'échec :
+    // avant, l'erreur partait en {error} silencieux et le front plantait dessus.
+    const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'en-US,en;q=0.9' } });
+    const body = await r.text();
+    if (!r.ok) {
+      console.error(`[steam/search] HTTP ${r.status} q="${q}" body=${body.slice(0, 200)}`);
+      return res.status(502).json({ error: `Steam store HTTP ${r.status}` });
+    }
+    let data;
+    try { data = JSON.parse(body); }
+    catch {
+      console.error(`[steam/search] reponse non-JSON q="${q}" body=${body.slice(0, 200)}`);
+      return res.status(502).json({ error: 'Steam store: reponse non-JSON' });
+    }
     const lib = await getLibraryMap(req.user.id);
-    res.json((data.items || []).map(g => {
+    const items = (data.items || []).map(g => {
       const libEntry = lib.get(g.id);
       return { appid: g.id, name: g.name, header_img: `https://cdn.cloudflare.steamstatic.com/steam/apps/${g.id}/header.jpg`, icon_img: libEntry?.icon_url || null, in_library: lib.has(g.id), playtime_hours: libEntry ? Math.round(libEntry.playtime_forever / 60) : 0 };
-    }));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    console.log(`[steam/search] q="${q}" -> ${items.length} resultat(s) (total Steam: ${data.total ?? '?'})`);
+    res.json(items);
+  } catch (e) {
+    console.error(`[steam/search] echec reseau q="${q}":`, e.message);
+    res.status(502).json({ error: e.message });
+  }
 });
 
 app.get('/api/steam/achievements/:appid', requireAuth, async (req, res) => {

@@ -25,6 +25,7 @@ import DeadlinePanel from './components/DeadlinePanel.jsx';
 import UpcomingPanel from './components/UpcomingPanel.jsx';
 import LibraryNewsPanel from './components/LibraryNewsPanel.jsx';
 import MobileHomeSlider from './components/MobileHomeSlider.jsx';
+import ShareBoardButton from './components/ShareBoardButton.jsx';
 
 const DISCORD_FALLBACK_ICON = 'https://cdn.discordapp.com/icons/983316258302877747/ebcf20448ef8818f93e8f31afad9f8d9.webp?size=64';
 const DISCORD_FALLBACK_URL  = 'https://discord.gg/9mXpM9wv';
@@ -278,6 +279,18 @@ function getSavedAuth() {
     return token && user ? { token, user } : null;
   } catch { return null; }
 }
+// ── Lien direct vers un board (/board/<id>) ──────────────────────────────────
+// L'app n'avait aucune route : l'URL restait sur "/" quel que soit le board
+// ouvert, donc aucun moyen de partager un lien vers un board precis. Le fallback
+// SPA de nginx (try_files ... /index.html) sert deja index.html sur ce chemin.
+const BOARD_PATH_RE     = /^\/board\/([A-Za-z0-9_-]+)\/?$/;
+const PENDING_BOARD_KEY = 'kbg_pending_board';
+
+function boardIdFromUrl() {
+  const m = BOARD_PATH_RE.exec(window.location.pathname);
+  return m ? m[1] : null;
+}
+
 export default function App() {
   const isMobile = useMobile();
   const isPWA = useIsPWA();
@@ -375,6 +388,7 @@ export default function App() {
 
   // Board state
   const [boards, setBoards] = useState([]);
+  const [boardsLoaded, setBoardsLoaded] = useState(false);
   const [boardOrder, setBoardOrder] = useState([]);  // persisted drag order
   const [boardDragId, setBoardDragId] = useState(null);
   const [boardDragOverId, setBoardDragOverId] = useState(null);
@@ -479,6 +493,7 @@ export default function App() {
   const [boardSearchQuery, setBoardSearchQuery] = useState('');
   const [boardSearchResults, setBoardSearchResults] = useState([]);
   const [boardSearchLoading, setBoardSearchLoading] = useState(false);
+  const [boardSearchError, setBoardSearchError] = useState('');
   const [selectedBoardGame, setSelectedBoardGame] = useState(null);
   const [showBoardSearch, setShowBoardSearch] = useState(false);
   const boardDebounce = useRef(null);
@@ -495,6 +510,12 @@ export default function App() {
     // Détection langue navigateur pour l'état non-authentifié
     initUserLang(null);
     initUserZoom(null);
+
+    // Lien direct /board/<id> : on memorise la cible AVANT tout le reste. Le
+    // retour de connexion Steam repasse par "/" (redirect ${FRONTEND_URL}?steam_token=...)
+    // et perdrait le chemin sinon.
+    const urlBoardId = boardIdFromUrl();
+    if (urlBoardId) { try { sessionStorage.setItem(PENDING_BOARD_KEY, urlBoardId); } catch {} }
 
     // Retour depuis Steam OpenID — token dans l'URL
     const params = new URLSearchParams(window.location.search);
@@ -690,6 +711,7 @@ export default function App() {
     if (res.status === 401) { handleLogout(); return; }
     const data = await res.json();
     setBoards(data);
+    setBoardsLoaded(true);
   }, [token]);
 
   const saveBoardName = async () => {
@@ -788,6 +810,49 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, [showDrawer, editingGame, showSearch, showNewBoard, showBoardSearch, showAdmin, showAccessModal, showProfile, showAppInfo, selectedGame, gameInfo, publicBoardMode, activeBoardId]);
+
+  // ── Lien direct : ouverture du board cible au chargement ──────────────────
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (!token || !currentUser || !boardsLoaded || deepLinkDone.current) return;
+    let pending = boardIdFromUrl();
+    if (!pending) { try { pending = sessionStorage.getItem(PENDING_BOARD_KEY); } catch {} }
+    deepLinkDone.current = true;
+    try { sessionStorage.removeItem(PENDING_BOARD_KEY); } catch {}
+    if (!pending) return;
+
+    const own = boards.find(b => b.id === pending);
+    if (own) {
+      setActiveBoardId(own.id);
+      setColumns(own.columns || []);
+      setPublicBoardMode(null);
+      setShowHome(false);
+      return;
+    }
+    // Pas un de mes boards : board public partage par quelqu'un d'autre ?
+    fetch(`${API}/public/boards`, { headers: authHeaders(token) })
+      .then(r => r.ok ? r.json() : [])
+      .then(list => {
+        const pub = Array.isArray(list) ? list.find(b => b.id === pending) : null;
+        if (pub) { openPublicBoard(pub); return; }
+        // Board inexistant, prive, ou acces retire : on nettoie l'URL.
+        try { window.history.replaceState({}, '', '/'); } catch {}
+        alert(t('board.not_found'));
+      })
+      .catch(() => {});
+  }, [token, currentUser, boardsLoaded, boards]);
+
+  // ── L'URL suit le board affiche ───────────────────────────────────────────
+  // replaceState (et non pushState) : aucune entree d'historique creee, donc
+  // l'interception du bouton retour Android ci-dessus reste inchangee.
+  useEffect(() => {
+    if (!deepLinkDone.current) return; // ne pas ecraser /board/<id> avant resolution
+    const id = publicBoardMode?.id || activeBoardId || null;
+    const target = id ? `/board/${id}` : '/';
+    if (window.location.pathname !== target) {
+      try { window.history.replaceState(window.history.state, '', target); } catch {}
+    }
+  }, [activeBoardId, publicBoardMode?.id]);
 
   // Sync columns whenever activeBoardId OR boards changes (avoids race where boards loads after activeBoardId effect)
   useEffect(() => {
@@ -919,12 +984,24 @@ export default function App() {
 
   // Board game search
   const searchBoardGames = useCallback(async (q) => {
-    if (!q.trim() || !token) { setBoardSearchResults([]); return; }
-    setBoardSearchLoading(true);
+    if (!q.trim() || !token) { setBoardSearchResults([]); setBoardSearchError(''); return; }
+    setBoardSearchLoading(true); setBoardSearchError('');
     try {
       const res = await fetch(`${API}/steam/search?q=${encodeURIComponent(q)}`, { headers: authHeaders(token) });
-      setBoardSearchResults((await res.json()).slice(0, 6));
-    } catch { setBoardSearchResults([]); } finally { setBoardSearchLoading(false); }
+      const data = await res.json().catch(() => null);
+      // Meme garde que dans SearchModal : en cas d'echec le backend renvoie
+      // {error} (objet). Avant, le .slice() dessus throwait, etait avale par le
+      // catch, et l'utilisateur voyait juste "aucun jeu trouve" sans raison.
+      if (!res.ok || !Array.isArray(data)) {
+        setBoardSearchResults([]);
+        setBoardSearchError(data?.error || `HTTP ${res.status}`);
+        return;
+      }
+      setBoardSearchResults(data.slice(0, 6));
+    } catch (e) {
+      setBoardSearchResults([]);
+      setBoardSearchError(e.message || 'network');
+    } finally { setBoardSearchLoading(false); }
   }, [token]);
 
   const handleBoardSearchInput = (val) => {
@@ -934,7 +1011,7 @@ export default function App() {
   };
   const selectBoardGame = (game) => { setSelectedBoardGame(game); setNewBoardName(game.name); setShowBoardSearch(false); setBoardSearchQuery(''); setBoardSearchResults([]); };
   const clearBoardGame = () => { setSelectedBoardGame(null); setNewBoardName(''); };
-  const resetNewBoard = () => { setShowNewBoard(false); setNewBoardName(''); setSelectedBoardGame(null); setBoardSearchQuery(''); setBoardSearchResults([]); setShowBoardSearch(false); };
+  const resetNewBoard = () => { setShowNewBoard(false); setNewBoardName(''); setSelectedBoardGame(null); setBoardSearchQuery(''); setBoardSearchResults([]); setBoardSearchError(''); setShowBoardSearch(false); };
 
   // Boards CRUD
   const createBoard = async () => {
@@ -2245,9 +2322,12 @@ export default function App() {
                   <>
                     <input autoFocus value={boardSearchQuery} onChange={e => handleBoardSearchInput(e.target.value)} placeholder={t('board.search_game_ph')}
                       style={{ width: '100%', background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 8px', color: 'var(--text)', fontSize: 12, outline: 'none', boxSizing: 'border-box' }} />
-                    {(boardSearchLoading || boardSearchResults.length > 0) && (
+                    {(boardSearchLoading || boardSearchError || boardSearchResults.length > 0) && (
                       <div style={{ position: 'absolute', bottom: '100%', left: 0, right: 0, zIndex: 200, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 2, boxShadow: '0 -8px 20px rgba(0,0,0,.5)', maxHeight: 200, overflowY: 'auto' }}>
                         {boardSearchLoading && <div style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-muted)' }}>{t('board.searching')}</div>}
+                        {!boardSearchLoading && boardSearchError && (
+                          <div style={{ padding: '8px 10px', fontSize: 11, color: '#ff6b6b' }}>{t('search.error')} — {boardSearchError}</div>
+                        )}
                         {[...boardSearchResults].reverse().map(g => (
                           <div key={g.appid} onClick={() => selectBoardGame(g)}
                             style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}
@@ -2352,6 +2432,7 @@ export default function App() {
                 >📦 {archiveCount}</button>
               )}
               <button onClick={refreshPublicBoard} title={t('nav.refresh')} style={{ background: 'rgba(255,255,255,.06)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', color: 'var(--text-muted)', fontSize: 14, cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>↻</button>
+              <ShareBoardButton boardId={publicBoardMode.id} boardName={publicBoardMode.name} compact />
               {isOwnPublicBoard && (
                 <button onClick={() => setShowAccessModal(true)} title={t('access.title')} style={{ background: 'rgba(255,255,255,.08)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', color: 'var(--text-muted)', fontSize: 13, cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}>🔐</button>
               )}
@@ -2376,6 +2457,7 @@ export default function App() {
                 </span>
               )}
               <button onClick={toggleCompact} title={t('nav.compact')} style={{ background: compactView ? 'rgba(192,87,10,0.15)' : 'rgba(255,255,255,.06)', border: compactView ? '1px solid var(--accent)' : '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', color: compactView ? 'var(--accent)' : 'var(--text-muted)', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}>⊟</button>
+              {activeBoardId && <ShareBoardButton boardId={activeBoardId} boardName={activeBoard?.name} compact />}
               {activeBoardId && archiveCount > 0 && (
                 <button
                   onClick={toggleShowArchived}
@@ -2487,6 +2569,7 @@ export default function App() {
                   <circle cx="10" cy="7" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/><path d="M15 3.13a4 4 0 0 1 0 7.75"/><path d="M20 21v-2a4 4 0 0 0-3-3.85"/>
                 </svg> Public
               </span>
+              <ShareBoardButton boardId={publicBoardMode.id} boardName={publicBoardMode.name} />
               {canEditPublicBoard && (
                 <button onClick={addColumn} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 12px', color: 'var(--text-muted)', fontSize: 12, cursor: 'pointer', flexShrink: 0 }}>{t('board.add_col')}</button>
               )}
@@ -2565,6 +2648,7 @@ export default function App() {
                   ) : '🔒 Privé'}
                 </span>
               )}
+              {activeBoardId && <ShareBoardButton boardId={activeBoardId} boardName={activeBoard?.name} />}
               {(activeBoardId || publicBoardMode) && (
                 <button onClick={addColumn} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 12px', color: 'var(--text-muted)', fontSize: 12, cursor: 'pointer', flexShrink: 0 }}>{t('board.add_col')}</button>
               )}

@@ -40,6 +40,7 @@ export default function SearchModal({ api, token, boardGames, onAdd, onRemove, o
   // Steam search
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
+  const [searchError, setSearchError] = useState('');
   const [loading, setLoading] = useState(false);
   const [added, setAdded] = useState(new Set(boardGames.map(g => g.appid)));
   const debounce = useRef(null);
@@ -72,12 +73,21 @@ export default function SearchModal({ api, token, boardGames, onAdd, onRemove, o
   const reqHeaders = token ? authHeaders(token) : {};
 
   const search = useCallback(async (q) => {
-    if (!q.trim()) { setResults([]); return; }
-    setLoading(true);
+    if (!q.trim()) { setResults([]); setSearchError(''); return; }
+    setLoading(true); setSearchError('');
     try {
       const res = await fetch(`${api}/steam/search?q=${encodeURIComponent(q)}`, { headers: reqHeaders });
-      setResults(await res.json());
-    } catch { setResults([]); }
+      const data = await res.json().catch(() => null);
+      // Le backend renvoie un OBJET {error} en cas d'echec, pas un tableau.
+      // Sans ce garde, setResults({error}) faisait planter results.map() plus
+      // bas au rendu ("j.map is not a function") au lieu d'afficher l'erreur.
+      if (!res.ok || !Array.isArray(data)) {
+        setResults([]);
+        setSearchError(data?.error || `HTTP ${res.status}`);
+        return;
+      }
+      setResults(data);
+    } catch (e) { setResults([]); setSearchError(e.message || 'network'); }
     finally { setLoading(false); }
   }, [api, token]);
 
@@ -217,7 +227,13 @@ export default function SearchModal({ api, token, boardGames, onAdd, onRemove, o
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 20px' }}>
               {loading && <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 36, fontSize: 14 }}>{t('search.loading')}</div>}
-              {!loading && query && results.length === 0 && (
+              {!loading && searchError && (
+                <div style={{ textAlign: 'center', color: '#ff6b6b', padding: 36, fontSize: 14, lineHeight: 1.6 }}>
+                  {t('search.error')}<br/>
+                  <span style={{ fontSize: 12, opacity: .8 }}>{searchError}</span>
+                </div>
+              )}
+              {!loading && !searchError && query && results.length === 0 && (
                 <div style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 36, fontSize: 14 }}>{t('search.no_results')}</div>
               )}
               {!loading && !query && (
