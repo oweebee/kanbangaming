@@ -1405,6 +1405,14 @@ export default function App() {
       })
     : favBoards;
 
+  // Boards publics suivis ET epingles : ils remontent dans la section "Epingles"
+  // en haut du menu et sont retires de la section "suivis" en bas (pas de
+  // doublon). Meme mecanique que les boards perso : cote serveur
+  // personalFavorites n'est qu'une liste d'ids sans contrainte de proprietaire,
+  // elle accepte donc aussi bien l'id d'un board public suivi.
+  const pinnedFavBoards   = sortedFavBoards.filter(b => personalFavIds.includes(b.id));
+  const unpinnedFavBoards = sortedFavBoards.filter(b => !personalFavIds.includes(b.id));
+
   const handleFavDrop = (targetId) => {
     if (!favDragId || favDragId === targetId) { setFavDragId(null); setFavDragOverId(null); return; }
     const base = favOrder.length > 0 ? favOrder : sortedFavBoards.map(b => b.id);
@@ -2088,7 +2096,7 @@ export default function App() {
           ensemble en un seul bloc). Sa propre liste est plafonnée (maxHeight + scroll interne)
           en tout dernier recours, seulement si "Mes boards" a déjà cédé toute la place qu'elle
           peut céder. */}
-      {personalFavIds.length > 0 && sortedBoards.some(b => personalFavIds.includes(b.id)) && (
+      {(sortedBoards.some(b => personalFavIds.includes(b.id)) || pinnedFavBoards.length > 0) && (
         <div style={{ padding: '6px 6px 0', flexShrink: 0 }}>
           <div style={{ fontSize: 9, fontWeight: 700, color: '#f5c518', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '4px 6px 2px', opacity: 0.8, display: 'flex', alignItems: 'center', gap: 4 }}>
             <svg viewBox="0 0 24 24" width="8" height="8" fill="#f5c518" stroke="#f5c518" strokeWidth="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
@@ -2151,6 +2159,51 @@ export default function App() {
             ) : (<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="var(--text-muted)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>)}</button>
             <button onClick={e => { e.stopPropagation(); deleteBoard(b.id); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 11, padding: 0, opacity: 0.4, cursor: 'pointer', flexShrink: 0 }}>✕</button>
           </div>
+          ))}
+
+          {/* Boards publics suivis + epingles. Clic = openPublicBoard (pas
+              setActiveBoardId), et aucun controle proprietaire (public/suppression)
+              puisque le board appartient a quelqu'un d'autre. Non draggables ici :
+              leur ordre reste celui de la section "suivis" (favOrder), qui est une
+              liste distincte de l'ordre des boards perso (boardOrder) — les melanger
+              dans le meme drag casserait les deux. */}
+          {pinnedFavBoards.filter(b => showHiddenBoards ? true : !hiddenBoardIds.has(b.id)).filter(b => matchesFilter(b.name, homeFilterText)).map(b => (
+            <div key={b.id}
+              onClick={() => { openPublicBoard(b); if (isMobile) setShowDrawer(false); }}
+              style={{
+                padding: '6px 8px', borderRadius: 7, cursor: 'pointer', marginBottom: 2,
+                background: publicBoardMode?.id === b.id ? 'var(--accent-dim)' : 'transparent',
+                borderLeft: publicBoardMode?.id === b.id ? '3px solid var(--accent)' : '3px solid transparent',
+                color: publicBoardMode?.id === b.id ? 'var(--text)' : 'var(--text-muted)',
+                display: 'flex', alignItems: 'center', gap: 5, transition: 'background .12s',
+              }}
+              onMouseEnter={e => { if (publicBoardMode?.id !== b.id) e.currentTarget.style.background = 'var(--surface2)'; }}
+              onMouseLeave={e => { if (publicBoardMode?.id !== b.id) e.currentTarget.style.background = 'transparent'; }}
+            >
+              {/* Liseré 3 couleurs : jaune = epingle, vert = board public, puis couleur de type */}
+              <div style={{ width: 38, height: 38, borderRadius: 10, background: `linear-gradient(90deg, #f5c518 33%, #3db86a 33% 66%, ${getBoardTypeColor(b)} 66%)`, padding: 2, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {b.gameIcon
+                  ? <img src={b.gameIcon} alt="" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 8, display: 'block' }} />
+                  : <div style={{ width: 34, height: 34, borderRadius: 8, background: 'var(--surface2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>{b.emoji || '🎮'}</div>}
+              </div>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 14, fontWeight: 700, opacity: hiddenBoardIds.has(b.id) ? 0.45 : 1 }}>{b.name}</span>
+              {/* Desepingler → le board redescend dans "Boards publics suivis" */}
+              <button
+                onClick={e => { e.stopPropagation(); togglePersonalFavorite(b.id, true); }}
+                title={t('hbc.pinned')}
+                style={{ background: 'none', border: 'none', fontSize: 11, padding: 0, cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="#f5c518" stroke="#f5c518" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+              </button>
+              {/* Ne plus suivre */}
+              <button
+                onClick={e => { e.stopPropagation(); toggleFavorite(b.id, b, true); }}
+                title={t('hbc.unfollow')}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', flexShrink: 0, lineHeight: 1 }}
+              >
+                <svg viewBox="0 0 24 24" width="10" height="10" fill="var(--accent)" stroke="var(--accent)" strokeWidth="1.5" style={{ opacity: 0.7 }}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+              </button>
+            </div>
           ))}
           </div>
         </div>
@@ -2253,14 +2306,14 @@ export default function App() {
       {/* Followed public boards — section secondaire à taille fixe (label toujours visible) ;
           sa propre liste est plafonnée (maxHeight + scroll interne) pour ne jamais pouvoir
           écraser "Mes boards" au-dessus si beaucoup de boards publics sont suivis. */}
-      {favBoards.length > 0 && (
+      {unpinnedFavBoards.length > 0 && (
         <div style={{ padding: '4px 6px 0', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
           <div style={{ fontSize: 10, color: 'var(--text-muted)', padding: '4px 2px 4px 4px', letterSpacing: '0.06em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 4 }}>
             <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             {t('board.followed_public')}
           </div>
           <div style={{ maxHeight: '32vh', overflowY: 'auto' }}>
-          {sortedFavBoards.filter(b => showHiddenBoards ? true : !hiddenBoardIds.has(b.id)).filter(b => matchesFilter(b.name, homeFilterText)).map(b => (
+          {unpinnedFavBoards.filter(b => showHiddenBoards ? true : !hiddenBoardIds.has(b.id)).filter(b => matchesFilter(b.name, homeFilterText)).map(b => (
             <div key={b.id}
               draggable
               onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setFavDragId(b.id); }}
@@ -2292,6 +2345,14 @@ export default function App() {
               {/* Ne plus suivre — repasse le board dans "Mes boards" si on en est le créateur
                   (sortedBoards le réintègre automatiquement dès qu'il sort de favBoards),
                   ou disparaît simplement de cette section sinon. */}
+              {/* Epingler → remonte le board dans la section "Epingles" en haut du menu */}
+              <button
+                onClick={e => { e.stopPropagation(); togglePersonalFavorite(b.id, false); }}
+                title={t('hbc.pin')}
+                style={{ background: 'none', border: 'none', fontSize: 11, padding: 0, cursor: 'pointer', flexShrink: 0, opacity: 0.4, lineHeight: 1 }}
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="var(--text-muted)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+              </button>
               <button
                 onClick={e => { e.stopPropagation(); toggleFavorite(b.id, b, true); }}
                 title={t('hbc.unfollow')}
